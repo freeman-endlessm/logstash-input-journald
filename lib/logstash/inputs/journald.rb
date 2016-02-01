@@ -36,9 +36,9 @@ class LogStash::Inputs::Journald < LogStash::Inputs::Threadable
     #
     config :thisboot, :validate => :boolean, :default => true
 
-    # Lowercase annoying UPPERCASE fieldnames. (May clobber existing fields)
+    # Lowercase annoying UPPERCASE fieldnames, remove underscore prefixes. (May clobber existing fields)
     #
-    config :lowercase, :validate => :boolean, :default => false
+    config :pretty_keys, :validate => :boolean, :default => false
 
     # Where to write the sincedb database (keeps track of the current
     # position of the journal). The default will write
@@ -62,6 +62,42 @@ class LogStash::Inputs::Journald < LogStash::Inputs::Threadable
         @cursor = ""
         @written_cursor = ""
         @cursor_lock = Mutex.new
+        $prettyfieldmap = {
+            :MESSAGE => 'message',
+            :MESSAGE_ID => 'message_id',
+            :PRIORITY => 'priority',
+            :CODE_FILE => 'code_file',
+            :CODE_LINE => 'code_line',
+            :CODE_FUNC => 'code_func',
+            :ERRNO => 'errno',
+            :SYSLOG_FACILITY => 'syslog_facility',
+            :SYSLOG_IDENTIFIER => 'syslog_identifier',
+            :SYSLOG_PID => 'syslog_pid',
+            :_PID => 'pid',
+            :_UID => 'uid',
+            :_GID => 'gid',
+            :_COMM => 'comm',
+            :_EXE => 'exe',
+            :_CMDLINE => 'cmdline',
+            :_AUDIT_SESSION => 'audit_session',
+            :_AUDIT_LOGINUID => 'audit_loginuid',
+            :_SYSTEMD_CGROUP => 'systemd_cgroup',
+            :_SYSTEMD_SESSION => 'systemd_session',
+            :_SYSTEMD_UNIT => 'systemd_unit',
+            :_SYSTEMD_USER_UNIT => 'systemd_user_unit',
+            :_SYSTEMD_OWNER_UID => 'systemd_owner_uid',
+            :_SELINUX_CONTEXT => 'selinux_context',
+            :_SOURCE_REALTIME_TIMESTAMP => 'source_realtime_timestamp',
+            :_BOOT_ID => 'boot_id',
+            :_MACHINE_ID => 'machine_id',
+            :_HOSTNAME => 'hostname',
+            :_TRANSPORT => 'transport',
+            :_KERNEL_DEVICE => 'kernel_device',
+            :_KERNEL_SUBSYSTEM => 'kernel_subsystem',
+            :_UDEV_SYSNAME => 'udev_sysname',
+            :_UDEV_DEVNODE => 'udev_devnode',
+            :_UDEV_DEVLINK => 'udev_devlink'
+        }
         if @thisboot
             @filter[:_boot_id] = Systemd::Id128.boot_id
         end
@@ -93,7 +129,7 @@ class LogStash::Inputs::Journald < LogStash::Inputs::Threadable
                     @cursor_lock.synchronize {
                         @written_cursor = @cursor
                     }
-                 end
+                end
             end
         end
     end # def register
@@ -118,7 +154,7 @@ class LogStash::Inputs::Journald < LogStash::Inputs::Threadable
         @journal.watch do |entry|
             timestamp = entry.realtime_timestamp
             event = LogStash::Event.new(
-                entry.to_h_lower(@lowercase).merge(
+                entry.to_h_pretty(@pretty_keys).merge(
                     "@timestamp" => timestamp,
                     "host" => entry._hostname || @hostname,
                     "cursor" => @journal.cursor
@@ -152,9 +188,11 @@ end # class LogStash::Inputs::Journald
 # Monkey patch Systemd::JournalEntry
 module Systemd
     class JournalEntry
-        def to_h_lower(is_lowercase)
-            if is_lowercase
-                @entry.each_with_object({}) { |(k, v), h| h[k.downcase] = v.dup.force_encoding('iso-8859-1').encode('utf-8') }
+        def to_h_pretty(is_pretty)
+            if is_pretty
+              @entry.each_with_object({}) { |(k, v), h|
+                    h[$prettyfieldmap.fetch(k.to_sym) { |key| k.downcase.sub(/^_*/, '') }] = v.dup.force_encoding('iso-8859-1').encode('utf-8')
+                }
             else
                 @entry.each_with_object({}) { |(k, v), h| h[k] = v.dup.force_encoding('iso-8859-1').encode('utf-8') }
             end
